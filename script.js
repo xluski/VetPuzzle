@@ -1,6 +1,6 @@
 /*
  * VetPuzzle - Edpuzzle Utilities
- * Copyright (C) 2025 YOUR_USERNAME
+ * Copyright (C) 2025 xluski
  *
  * Based on ading2210/edpuzzle-answers (https://github.com/ading2210/edpuzzle-answers)
  * Original Copyright (C) 2025 ading2210, licensed under GNU AGPL v3
@@ -10,7 +10,7 @@
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Source code: https://github.com/YOUR_USERNAME/vetpuzzle
+ * Source code: https://github.com/xluski/vetpuzzle
  */
 
 (async () => {
@@ -20,7 +20,7 @@
   const VP = {
     name: "VetPuzzle",
     version: "1.0.0",
-    repo: "https://github.com/YOUR_USERNAME/vetpuzzle",
+    repo: "https://github.com/xluski/vetpuzzle",
     credit: "https://github.com/ading2210/edpuzzle-answers",
     apiBase: "https://edpuzzle.com/api/v3",
   };
