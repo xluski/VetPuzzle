@@ -21,7 +21,7 @@ A powerful Edpuzzle bookmarklet with a clean modern UI. Fetch answers, skip vide
 Or manually create a bookmark with this URL:
 
 ```
-javascript:fetch('https://cdn.jsdelivr.net/gh/YOUR_USERNAME/vetpuzzle@latest/script.js').then(r=>r.text()).then(r=>eval(r))
+javascript:fetch('https://cdn.jsdelivr.net/gh/xluski/VetPuzzle@latest/script.js').then(r=>r.text()).then(r=>eval(r))
 ```
 
 ## Usage
