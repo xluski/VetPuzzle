@@ -15,7 +15,7 @@ A powerful Edpuzzle bookmarklet with a clean modern UI. Fetch answers, skip vide
 ## Install
 
 1. Show your bookmarks bar (`Ctrl+Shift+B` / `Cmd+Shift+B`)
-2. Drag the button from [your site] into the bar
+2. Drag the button from https://xluski.github.io/VetPuzzle into the bar
 3. Navigate to an Edpuzzle assignment and click it
 
 Or manually create a bookmark with this URL:
@@ -33,10 +33,6 @@ javascript:fetch('https://cdn.jsdelivr.net/gh/xluski/VetPuzzle@latest/script.js'
 
 Works on Canvas and Schoology embedded Edpuzzles too.
 
-## Self-hosting
-
-Just push this repo and enable GitHub Pages on the `main` branch. Update `YOUR_USERNAME` in `bookmarklet.js` and `index.html` to your actual GitHub username.
-
 ## Credits
 
 Based on [ading2210/edpuzzle-answers](https://github.com/ading2210/edpuzzle-answers) — all credit to the original author for the core approach.
@@ -47,7 +43,7 @@ GNU Affero General Public License v3.0 — see [LICENSE](LICENSE)
 
 ```
 VetPuzzle - Edpuzzle Utilities
-Copyright (C) 2025 YOUR_USERNAME
+Copyright (C) 2025 xluski
 
 Based on ading2210/edpuzzle-answers
 Copyright (C) 2025 ading2210
