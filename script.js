@@ -10,110 +10,96 @@
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Source code: https://github.com/xluski/vetpuzzle
+ * Source code: https://github.com/xluski/VetPuzzle
  */
 
 (async () => {
   "use strict";
 
-  // ── CONFIG ──────────────────────────────────────────────────
   const VP = {
     name: "VetPuzzle",
     version: "1.0.0",
-    repo: "https://github.com/xluski/vetpuzzle",
+    repo: "https://github.com/xluski/VetPuzzle",
     credit: "https://github.com/ading2210/edpuzzle-answers",
     apiBase: "https://edpuzzle.com/api/v3",
   };
 
-  // ── UTILS ────────────────────────────────────────────────────
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const rand = (min, max) => Math.random() * (max - min) + min;
 
-  // Get Edpuzzle assignment ID from URL
-  function getAssignmentId() {
-    const patterns = [
-      /assignments\/([a-z0-9]+)\/watch/,
-      /media\/([a-z0-9]+)/,
-      /([a-z0-9]{24})/,
-    ];
-    for (const p of patterns) {
-      const m = location.href.match(p);
-      if (m) return m[1];
-    }
-    return null;
+  // ── GET IDs FROM URL ─────────────────────────────────────────
+  function getIds() {
+    const params = new URLSearchParams(location.search);
+    const attachmentId = params.get("attachmentId");
+    const pathMatch = location.pathname.match(/assignments\/([a-z0-9]+)/i);
+    const assignmentId = pathMatch ? pathMatch[1] : null;
+    return { assignmentId, attachmentId };
   }
 
-  // Extract JWT token from cookies / local storage
-  function getAuthToken() {
-    const cookies = document.cookie.split(";").map((c) => c.trim());
-    for (const c of cookies) {
-      if (c.startsWith("jwt=") || c.startsWith("token=")) {
-        return c.split("=")[1];
-      }
-    }
-    for (const key of Object.keys(localStorage)) {
-      const val = localStorage.getItem(key);
-      if (val && val.startsWith("eyJ")) return val;
-    }
-    return null;
-  }
-
-  // ── API CALLS ─────────────────────────────────────────────────
-  async function fetchAssignment(id) {
-    const res = await fetch(`${VP.apiBase}/attempts/${id}`, {
-      credentials: "include",
-    });
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
+  // ── API ───────────────────────────────────────────────────────
+  async function fetchAttempt(assignmentId, attachmentId) {
+    const url = attachmentId
+      ? `${VP.apiBase}/attempts/${assignmentId}?attachmentId=${attachmentId}`
+      : `${VP.apiBase}/attempts/${assignmentId}`;
+    const res = await fetch(url, { credentials: "include" });
+    if (!res.ok) throw new Error(`Attempts API error: ${res.status}`);
     return res.json();
   }
 
-  async function fetchMediaInfo(mediaId) {
-    const res = await fetch(`${VP.apiBase}/media/${mediaId}`, {
-      credentials: "include",
-    });
+  async function fetchMedia(mediaId) {
+    const res = await fetch(`${VP.apiBase}/media/${mediaId}`, { credentials: "include" });
     if (!res.ok) throw new Error(`Media API error: ${res.status}`);
     return res.json();
   }
 
-  // ── ANSWER EXTRACTION ─────────────────────────────────────────
+  async function fetchAttachment(attachmentId) {
+    const res = await fetch(`${VP.apiBase}/media-attachments/${attachmentId}`, { credentials: "include" });
+    if (!res.ok) throw new Error(`Attachment API error: ${res.status}`);
+    return res.json();
+  }
+
+  // ── EXTRACT ANSWERS ──────────────────────────────────────────
   function extractAnswers(data) {
     const questions = [];
-    const media = data?.medias?.[0] || data?.media || {};
-    const qs = media?.questions || data?.questions || [];
+    const qs =
+      data?.questions ||
+      data?.media?.questions ||
+      data?.medias?.[0]?.questions ||
+      data?.mediaAttachment?.media?.questions ||
+      data?.assignment?.media?.questions ||
+      [];
 
     for (const q of qs) {
       if (!q) continue;
-      const type = q.type;
-      const text = q.body?.[0]?.text || q.question || "Question";
+      const text =
+        q.body?.find?.((b) => b.text)?.text ||
+        q.body?.[0]?.text ||
+        q.question ||
+        "Question";
 
-      if (type === "multiple-choice" || type === "mc") {
+      if (q.type === "multiple-choice" || q.type === "mc") {
         const correct = (q.choices || []).filter((c) => c.isCorrect);
         questions.push({
           type: "mc",
           question: text,
-          answers: correct.map((c) => c.body?.[0]?.text || c.text || ""),
+          answers: correct.map((c) =>
+            c.body?.find?.((b) => b.text)?.text || c.body?.[0]?.text || c.text || ""
+          ),
           time: q.time,
           id: q._id,
         });
-      } else if (type === "open-ended" || type === "fr") {
-        questions.push({
-          type: "fr",
-          question: text,
-          answers: [],
-          time: q.time,
-          id: q._id,
-        });
+      } else if (q.type === "open-ended" || q.type === "fr") {
+        questions.push({ type: "fr", question: text, answers: [], time: q.time, id: q._id });
       }
     }
     return questions;
   }
 
-  // ── VIDEO SKIPPER ────────────────────────────────────────────
+  // ── VIDEO / SPEED ────────────────────────────────────────────
   function skipVideo(targetTime) {
     const video = document.querySelector("video");
     if (!video) return false;
     try {
-      // Bypass time restriction by patching currentTime setter
       const proto = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "currentTime");
       if (proto) {
         Object.defineProperty(video, "currentTime", {
@@ -124,122 +110,82 @@
       }
       video.currentTime = targetTime ?? video.duration - 0.1;
       return true;
-    } catch (e) {
-      return false;
-    }
+    } catch (e) { return false; }
   }
 
   function setSpeed(speed) {
     const video = document.querySelector("video");
     if (!video) return false;
     video.playbackRate = speed;
-    // Re-apply on rate change events (Edpuzzle resets it)
     video.addEventListener("ratechange", () => {
       if (video.playbackRate !== speed) video.playbackRate = speed;
     });
     return true;
   }
 
-  // ── NO AUTOPAUSE ─────────────────────────────────────────────
   function disableAutoPause() {
-    // Override visibility/focus events Edpuzzle uses to pause
     const noop = (e) => e.stopImmediatePropagation();
     document.addEventListener("visibilitychange", noop, true);
     window.addEventListener("blur", noop, true);
-    return true;
   }
 
-  // ── STEALTH MODE ─────────────────────────────────────────────
-  // Randomizes answer submission timing to appear human
-  async function stealthDelay() {
-    await sleep(rand(800, 2400));
-  }
+  // ── STEALTH ───────────────────────────────────────────────────
+  async function stealthDelay() { await sleep(rand(800, 2400)); }
+  function applyStealthPatches() { console.log("[VetPuzzle] Stealth mode active"); }
 
-  function applyStealthPatches() {
-    // Randomize mouse-tracking data Edpuzzle may record
-    const origGetBoundingClientRect = Element.prototype.getBoundingClientRect;
-    // Only patch non-critical calls
-    console.log("[VetPuzzle] Stealth mode active");
-  }
-
-  // ── AUTO ANSWERER ─────────────────────────────────────────────
+  // ── AUTO ANSWER ───────────────────────────────────────────────
   async function autoAnswer(questions, stealth = false) {
-    const answered = [];
     for (const q of questions) {
       if (q.type !== "mc" || !q.answers.length) continue;
       try {
         if (stealth) await stealthDelay();
-        // Find and click the correct answer choice in the DOM
         const choices = document.querySelectorAll(
           '[class*="choice"], [class*="Choice"], [class*="option"], [class*="Option"]'
         );
-        let clicked = false;
         for (const el of choices) {
           if (el.textContent.trim().includes(q.answers[0])) {
             el.click();
-            clicked = true;
-            answered.push(q.id);
             break;
-          }
-        }
-        if (!clicked) {
-          // Fallback: dispatch synthetic click via React fiber
-          const fiber = Object.keys(el || {}).find((k) => k.startsWith("__reactFiber") || k.startsWith("__reactInternalInstance"));
-          if (fiber) {
-            // trigger React synthetic event
           }
         }
       } catch (_) {}
     }
-    return answered;
   }
 
   // ── UI ────────────────────────────────────────────────────────
   function buildUI(questions, assignmentTitle) {
     const popup = window.open("about:blank", "_blank", "width=460,height=620,resizable=yes");
     if (!popup) {
-      alert("[VetPuzzle] Please allow popups for this site, then try again.");
+      alert("[VetPuzzle] Please allow popups for edpuzzle.com, then try again.");
       return;
     }
 
     const mcCount = questions.filter((q) => q.type === "mc").length;
     const frCount = questions.filter((q) => q.type === "fr").length;
 
-    const answersHTML = questions
-      .map((q, i) => {
-        const badge = q.type === "mc"
-          ? `<span class="badge badge-mc">MC</span>`
-          : `<span class="badge badge-fr">FR</span>`;
-        const answerText = q.answers.length
-          ? q.answers.join(" / ")
-          : `<span style="color:var(--text3);font-style:italic">Use AI auto-answer</span>`;
-        return `
-          <div class="answer-item">
-            <div class="answer-num">${String(i + 1).padStart(2, "0")}</div>
-            <div class="answer-content">
-              <div class="answer-q">${q.question}</div>
-              <div class="answer-a">${answerText}</div>
-            </div>
-            ${badge}
-          </div>`;
-      })
-      .join("");
+    const answersHTML = questions.map((q, i) => {
+      const badge = q.type === "mc"
+        ? `<span class="badge badge-mc">MC</span>`
+        : `<span class="badge badge-fr">FR</span>`;
+      const answerText = q.answers.length
+        ? q.answers.join(" / ")
+        : `<span style="color:var(--text3);font-style:italic">Open ended</span>`;
+      return `<div class="answer-item">
+        <div class="answer-num">${String(i + 1).padStart(2, "0")}</div>
+        <div class="answer-content">
+          <div class="answer-q">${q.question}</div>
+          <div class="answer-a">${answerText}</div>
+        </div>
+        ${badge}
+      </div>`;
+    }).join("");
 
     popup.document.write(`<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>VetPuzzle</title>
+<html><head><meta charset="UTF-8"><title>VetPuzzle</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#f7f7f6;--surface:#fff;--surface2:#f2f1ef;--border:#e5e4e0;
-  --text:#1a1a18;--text2:#6b6b67;--text3:#a8a8a3;
-  --accent:#1a1a18;--green:#1a9e5c;--green-soft:#e8f7ef;
-  --blue:#2563eb;--blue-soft:#eff4ff;--red:#d94f4f;--red-soft:#fdf0f0;
-  --radius:12px;--radius-sm:8px;
-}
+:root{--bg:#f7f7f6;--surface:#fff;--surface2:#f2f1ef;--border:#e5e4e0;--text:#1a1a18;--text2:#6b6b67;--text3:#a8a8a3;--accent:#1a1a18;--green:#1a9e5c;--green-soft:#e8f7ef;--blue:#2563eb;--blue-soft:#eff4ff;--radius:12px;--radius-sm:8px;}
 body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden;}
 .header{padding:16px 18px 0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
 .logo{display:flex;align-items:center;gap:9px;}
@@ -251,7 +197,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);hei
 .close-btn:hover{background:var(--surface2);}
 .close-btn svg{width:12px;height:12px;}
 .load-bar{height:2px;background:var(--border);margin:14px 18px 0;border-radius:1px;overflow:hidden;flex-shrink:0;}
-.load-fill{height:100%;width:100%;background:var(--accent);border-radius:1px;animation:loadAnim .6s ease forwards;}
+.load-fill{height:100%;width:0;background:var(--accent);border-radius:1px;animation:loadAnim .6s ease forwards;}
 @keyframes loadAnim{from{width:0}to{width:100%}}
 .assign-card{margin:12px 18px 0;padding:12px 14px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border);flex-shrink:0;}
 .assign-label{font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--text3);margin-bottom:4px;}
@@ -264,7 +210,6 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);hei
 .tab.active{color:var(--text);background:var(--surface2);border-color:var(--border);font-weight:600;}
 .content{flex:1;overflow-y:auto;padding:12px 18px;}
 .content::-webkit-scrollbar{width:4px;}
-.content::-webkit-scrollbar-track{background:transparent;}
 .content::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
 .tab-pane{display:none;}.tab-pane.active{display:block;}
 .ans-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
@@ -312,20 +257,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 .footer-credit a:hover{text-decoration:underline;}
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(16px);background:var(--text);color:#fff;padding:7px 16px;border-radius:20px;font-size:12px;font-weight:500;opacity:0;transition:all .2s;pointer-events:none;white-space:nowrap;z-index:999;}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
-</style>
-</head>
-<body>
+</style></head><body>
 <div class="header">
   <div class="logo">
-    <div class="logo-mark">
-      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><rect x="3" y="3" width="18" height="18" rx="4"/></svg>
-    </div>
+    <div class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><rect x="3" y="3" width="18" height="18" rx="4"/></svg></div>
     <span class="logo-name">VetPuzzle</span>
     <span class="logo-ver">v${VP.version}</span>
   </div>
-  <div class="close-btn" onclick="window.close()">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-  </div>
+  <div class="close-btn" onclick="window.close()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div>
 </div>
 <div class="load-bar"><div class="load-fill"></div></div>
 <div class="assign-card">
@@ -343,33 +282,26 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 </div>
 <div class="content">
   <div class="tab-pane active" id="pane-answers">
-    <div class="ans-header">
-      <span class="ans-title">Questions</span>
-      <span class="ans-count">${questions.length} found</span>
-    </div>
+    <div class="ans-header"><span class="ans-title">Questions</span><span class="ans-count">${questions.length} found</span></div>
     ${answersHTML || '<p style="color:var(--text3);font-size:13px;text-align:center;padding:20px 0;">No questions found.</p>'}
   </div>
   <div class="tab-pane" id="pane-controls">
     <div class="ctrl-grid">
       <div class="ctrl-card" id="c-auto" onclick="toggle('auto')">
         <div class="ctrl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></div>
-        <div class="ctrl-lbl">Auto Answer</div>
-        <div class="ctrl-desc">Submit MC answers instantly</div>
+        <div class="ctrl-lbl">Auto Answer</div><div class="ctrl-desc">Submit MC answers instantly</div>
       </div>
       <div class="ctrl-card" id="c-skip" onclick="toggle('skip')">
         <div class="ctrl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg></div>
-        <div class="ctrl-lbl">Skip Video</div>
-        <div class="ctrl-desc">Jump to end of video</div>
+        <div class="ctrl-lbl">Skip Video</div><div class="ctrl-desc">Jump to end of video</div>
       </div>
       <div class="ctrl-card" id="c-stealth" onclick="toggle('stealth')">
         <div class="ctrl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></div>
-        <div class="ctrl-lbl">Stealth Mode</div>
-        <div class="ctrl-desc">Randomize timing</div>
+        <div class="ctrl-lbl">Stealth Mode</div><div class="ctrl-desc">Randomize timing</div>
       </div>
       <div class="ctrl-card" id="c-pause" onclick="toggle('pause')">
         <div class="ctrl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="9" y2="15"/><line x1="15" y1="9" x2="15" y2="15"/></svg></div>
-        <div class="ctrl-lbl">No Autopause</div>
-        <div class="ctrl-desc">Keep playing on tab switch</div>
+        <div class="ctrl-lbl">No Autopause</div><div class="ctrl-desc">Keep playing on tab switch</div>
       </div>
       <div class="ctrl-card ctrl-wide">
         <div class="ctrl-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
@@ -386,12 +318,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 </div>
 <div class="actions">
   <button class="btn btn-run" onclick="runAll()">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-    Run
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>Run
   </button>
   <button class="btn btn-copy" onclick="copyAnswers()">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-    Copy
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>Copy
   </button>
 </div>
 <div class="footer">
@@ -401,77 +331,81 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 <div class="toast" id="toast"></div>
 <script>
 const state={auto:false,skip:false,stealth:false,pause:false};
-function tab(name,el){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
-  el.classList.add('active');
-  document.getElementById('pane-'+name).classList.add('active');
-}
-function toggle(id){
-  state[id]=!state[id];
-  document.getElementById('c-'+id).classList.toggle('on',state[id]);
-  toast(state[id]?'Enabled':'Disabled');
-}
-function chgSpd(v){
-  document.getElementById('spdVal').textContent=parseFloat(v).toFixed(2).replace(/\\.?0+$/,'')+'×';
-}
-function runAll(){
-  window.opener?.postMessage({type:'vetpuzzle-run',state},'*');
-  toast('Running VetPuzzle...');
-}
-function copyAnswers(){
-  const items=document.querySelectorAll('.answer-item');
-  let txt='';
-  items.forEach((el,i)=>{
-    const q=el.querySelector('.answer-q')?.textContent||'';
-    const a=el.querySelector('.answer-a')?.textContent||'';
-    txt+=\`Q\${i+1}: \${q}\\nA: \${a}\\n\\n\`;
-  });
-  navigator.clipboard.writeText(txt.trim()).then(()=>toast('Copied!'));
-}
-function toast(msg){
-  const t=document.getElementById('toast');
-  t.textContent=msg;t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'),2000);
-}
+function tab(name,el){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));el.classList.add('active');document.getElementById('pane-'+name).classList.add('active');}
+function toggle(id){state[id]=!state[id];document.getElementById('c-'+id).classList.toggle('on',state[id]);toast(state[id]?'Enabled':'Disabled');}
+function chgSpd(v){document.getElementById('spdVal').textContent=parseFloat(v).toFixed(2).replace(/\\.?0+$/,'')+'×';}
+function runAll(){const speed=parseFloat(document.getElementById('spd').value);window.opener?.postMessage({type:'vetpuzzle-run',state,speed},'*');toast('Running VetPuzzle...');}
+function copyAnswers(){const items=document.querySelectorAll('.answer-item');let txt='';items.forEach((el,i)=>{const q=el.querySelector('.answer-q')?.textContent||'';const a=el.querySelector('.answer-a')?.textContent||'';txt+=\`Q\${i+1}: \${q}\\nA: \${a}\\n\\n\`;});navigator.clipboard.writeText(txt.trim()).then(()=>toast('Copied!'));}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000);}
 <\/script>
 </body></html>`);
     popup.document.close();
 
-    // Listen for run command back from popup
     window.addEventListener("message", async (e) => {
       if (e.data?.type !== "vetpuzzle-run") return;
       const s = e.data.state;
+      const speed = e.data.speed || 1;
       if (s.pause) disableAutoPause();
       if (s.stealth) applyStealthPatches();
-      const speed = parseFloat(popup.document.getElementById?.("spd")?.value || 1);
       if (speed !== 1) setSpeed(speed);
       if (s.skip) skipVideo();
       if (s.auto) await autoAnswer(questions, s.stealth);
     });
   }
 
-  // ── ENTRY POINT ───────────────────────────────────────────────
+  // ── MAIN ──────────────────────────────────────────────────────
   async function main() {
-    const id = getAssignmentId();
-    if (!id) {
-      alert(`[VetPuzzle] Couldn't find an Edpuzzle assignment on this page.\nMake sure you're on an assignment watch page.`);
+    const { assignmentId, attachmentId } = getIds();
+
+    if (!assignmentId && !attachmentId) {
+      alert("[VetPuzzle] Couldn't find an Edpuzzle assignment on this page.\nMake sure you're on an assignment watch page.");
       return;
     }
 
-    let data, questions, title;
-    try {
-      data = await fetchAssignment(id);
-      questions = extractAnswers(data);
-      title = data?.medias?.[0]?.title || data?.title || data?.name || "Assignment";
-    } catch (err) {
-      // Try media fallback
+    let questions = [];
+    let title = "Assignment";
+
+    // Strategy 1: attempts endpoint
+    if (assignmentId) {
       try {
-        data = await fetchMediaInfo(id);
+        const data = await fetchAttempt(assignmentId, attachmentId);
+        questions = extractAnswers(data);
+        title = data?.medias?.[0]?.title || data?.media?.title || data?.title || data?.name || "Assignment";
+      } catch (e) {
+        console.warn("[VetPuzzle] Attempts fetch failed:", e.message);
+      }
+    }
+
+    // Strategy 2: media-attachments endpoint
+    if (!questions.length && attachmentId) {
+      try {
+        const data = await fetchAttachment(attachmentId);
+        questions = extractAnswers(data);
+        title = data?.media?.title || data?.title || "Assignment";
+      } catch (e) {
+        console.warn("[VetPuzzle] Attachment fetch failed:", e.message);
+      }
+    }
+
+    // Strategy 3: media endpoint with attachmentId
+    if (!questions.length && attachmentId) {
+      try {
+        const data = await fetchMedia(attachmentId);
         questions = extractAnswers(data);
         title = data?.title || "Assignment";
-      } catch (err2) {
-        alert(`[VetPuzzle] Failed to fetch assignment data.\nError: ${err2.message}`);
+      } catch (e) {
+        console.warn("[VetPuzzle] Media/attachment fetch failed:", e.message);
+      }
+    }
+
+    // Strategy 4: media endpoint with assignmentId
+    if (!questions.length && assignmentId) {
+      try {
+        const data = await fetchMedia(assignmentId);
+        questions = extractAnswers(data);
+        title = data?.title || "Assignment";
+      } catch (e) {
+        alert(`[VetPuzzle] Could not load assignment data. Try refreshing and running again.\nError: ${e.message}`);
         return;
       }
     }
