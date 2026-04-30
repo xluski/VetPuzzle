@@ -16,51 +16,12 @@
     version: "1.0.0",
     repo: "https://github.com/xluski/VetPuzzle",
     credit: "https://github.com/ading2210/edpuzzle-answers",
-    mirrors: ["https://edpuzzle.hgci.org", "https://edpuzzle.librecheats.net"],
   };
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const rand = (min, max) => Math.random() * (max - min) + min;
 
-  // ── CHECK NOT ON MIRROR PAGE ──────────────────────────────────
-  const mirrorHostnames = VP.mirrors.map((u) => new URL(u).hostname);
-  if (mirrorHostnames.includes(window.location.hostname)) {
-    alert("To use VetPuzzle, drag the bookmarklet into your bookmarks bar, then run it on an Edpuzzle assignment.");
-    return;
-  }
-
-  // ── FETCH DATA FROM MIRRORS ───────────────────────────────────
-  async function fetchFromMirror(mirror) {
-    const r = await fetch(mirror + "/api/v1/answers/" + getAssignmentId(), {
-      cache: "no-cache",
-      credentials: "include",
-    });
-    if (!r.ok) throw new Error(`Mirror ${mirror} returned ${r.status}`);
-    return r.json();
-  }
-
-  async function fetchWithMirrorFallback() {
-    // Try each mirror in order
-    for (const mirror of VP.mirrors) {
-      try {
-        const data = await fetchFromMirror(mirror);
-        return { data, mirror };
-      } catch (e) {
-        console.warn(`[VetPuzzle] Mirror ${mirror} failed:`, e.message);
-      }
-    }
-    throw new Error("All mirrors failed.");
-  }
-
   // ── GET ASSIGNMENT ID ─────────────────────────────────────────
-  function getAssignmentId() {
-    const params = new URLSearchParams(location.search);
-    const attachmentId = params.get("attachmentId");
-    if (attachmentId) return attachmentId;
-    const m = location.pathname.match(/assignments\/([a-z0-9]+)/i);
-    return m ? m[1] : null;
-  }
-
   function getIds() {
     const params = new URLSearchParams(location.search);
     return {
@@ -69,12 +30,11 @@
     };
   }
 
-  // ── EDPUZZLE API (direct, same as original) ───────────────────
+  // ── EDPUZZLE API (direct) ─────────────────────────────────────
   async function fetchEdpuzzleDirect() {
     const { assignmentId, attachmentId } = getIds();
     if (!assignmentId) throw new Error("No assignment ID found in URL");
 
-    // This is exactly what the original open.js does under the hood
     const url = attachmentId
       ? `https://edpuzzle.com/api/v3/attempts/${assignmentId}?attachmentId=${attachmentId}`
       : `https://edpuzzle.com/api/v3/attempts/${assignmentId}`;
@@ -84,18 +44,16 @@
     return r.json();
   }
 
-  // ── EXTRACT ANSWERS (handles all API response shapes) ─────────
+  // ── EXTRACT ANSWERS ───────────────────────────────────────────
   function extractAnswers(data) {
     const questions = [];
 
-    // Walk every possible location answers could be
     const sources = [
       data?.questions,
       data?.media?.questions,
       data?.medias?.[0]?.questions,
       data?.mediaAttachment?.media?.questions,
       data?.assignment?.media?.questions,
-      data?.answers, // mirror format
     ].filter(Boolean);
 
     const qs = sources[0] || [];
@@ -379,99 +337,6 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
     });
   }
 
-  // ── LOAD open.js FROM MIRROR, INTERCEPT THE DATA ──────────────
-  // We hook into XMLHttpRequest and fetch so when the mirror's open.js
-  // makes its API calls, we grab the response and build our UI with it.
-  async function loadViaMirror() {
-    let resolveData, rejectData;
-    const dataPromise = new Promise((res, rej) => {
-      resolveData = res;
-      rejectData = rej;
-    });
-
-    // Intercept fetch calls made by the mirror script
-    const origFetch = window.fetch;
-    window.fetch = async function (...args) {
-      const result = await origFetch.apply(this, args);
-      try {
-        const url = typeof args[0] === "string" ? args[0] : args[0]?.url || "";
-        if (url.includes("edpuzzle.com/api") || url.includes("/api/v")) {
-          const clone = result.clone();
-          clone.json().then((data) => {
-            const questions = extractAnswers(data);
-            if (questions.length > 0) {
-              const title =
-                data?.medias?.[0]?.title ||
-                data?.media?.title ||
-                data?.title ||
-                data?.name ||
-                "Assignment";
-              resolveData({ questions, title });
-            }
-          }).catch(() => {});
-        }
-      } catch (_) {}
-      return result;
-    };
-
-    // Also intercept XHR
-    const origOpen = XMLHttpRequest.prototype.open;
-    const origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-      this._vpUrl = url;
-      return origOpen.apply(this, [method, url, ...rest]);
-    };
-    XMLHttpRequest.prototype.send = function (...args) {
-      this.addEventListener("load", () => {
-        try {
-          if (this._vpUrl?.includes("edpuzzle.com/api") || this._vpUrl?.includes("/api/v")) {
-            const data = JSON.parse(this.responseText);
-            const questions = extractAnswers(data);
-            if (questions.length > 0) {
-              const title =
-                data?.medias?.[0]?.title ||
-                data?.media?.title ||
-                data?.title ||
-                data?.name ||
-                "Assignment";
-              resolveData({ questions, title });
-            }
-          }
-        } catch (_) {}
-      });
-      return origSend.apply(this, args);
-    };
-
-    // Now load from mirror — it'll do the API call and we intercept it
-    let loaded = false;
-    for (const mirror of VP.mirrors) {
-      try {
-        const r = await origFetch(mirror + "/open.js", { cache: "no-cache" });
-        const script = r.text ? await r.text() : "";
-        window.base_url = mirror;
-        // Suppress the mirror's own UI by overriding its display functions
-        window.show_ui = () => {};
-        window.display_answers = () => {};
-        eval(script);
-        loaded = true;
-        break;
-      } catch (e) {
-        console.warn(`[VetPuzzle] Mirror ${mirror} failed:`, e.message);
-      }
-    }
-
-    if (!loaded) {
-      rejectData(new Error("All mirrors failed to load"));
-    }
-
-    // Wait up to 10 seconds for data to come through
-    const timeout = new Promise((_, rej) =>
-      setTimeout(() => rej(new Error("Timed out waiting for assignment data")), 10000)
-    );
-
-    return Promise.race([dataPromise, timeout]);
-  }
-
   // ── MAIN ──────────────────────────────────────────────────────
   async function main() {
     if (!location.href.includes("edpuzzle.com")) {
@@ -479,27 +344,14 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
       return;
     }
 
-    let questions = [];
-    let title = "Assignment";
-
     try {
-      const result = await loadViaMirror();
-      questions = result.questions;
-      title = result.title;
+      const data = await fetchEdpuzzleDirect();
+      const questions = extractAnswers(data);
+      const title = data?.medias?.[0]?.title || data?.media?.title || data?.title || "Assignment";
+      buildUI(questions, title);
     } catch (e) {
-      console.warn("[VetPuzzle] Mirror approach failed, trying direct API:", e.message);
-      // Fallback: try Edpuzzle API directly
-      try {
-        const data = await fetchEdpuzzleDirect();
-        questions = extractAnswers(data);
-        title = data?.medias?.[0]?.title || data?.media?.title || data?.title || "Assignment";
-      } catch (e2) {
-        alert(`[VetPuzzle] Could not load assignment data.\n\nMake sure you're on an assignment watch page and logged in.\n\nError: ${e2.message}`);
-        return;
-      }
+      alert(`[VetPuzzle] Could not load assignment data.\n\nMake sure you're on an assignment watch page and logged in.\n\nError: ${e.message}`);
     }
-
-    buildUI(questions, title);
   }
 
   main();
